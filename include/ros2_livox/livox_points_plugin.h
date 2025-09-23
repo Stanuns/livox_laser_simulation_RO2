@@ -5,15 +5,13 @@
 #ifndef SRC_GAZEBO_LIVOX_POINTS_PLUGIN_H
 #define SRC_GAZEBO_LIVOX_POINTS_PLUGIN_H
 
-#include <gazebo/plugins/RayPlugin.hh>
-#include "livox_ode_multiray_shape.h"
-#include <gazebo_ros/node.hpp>
 #include <gazebo/gazebo.hh>
-#include "rclcpp/rclcpp.hpp"
+#include <gazebo/plugins/RayPlugin.hh>
+#include <gazebo_ros/node.hpp>
 #include "sensor_msgs/msg/point_cloud2.hpp"
-#include "sensor_msgs/point_cloud_conversion.hpp"
-#include "geometry_msgs/msg/transform_stamped.hpp"
 #include <livox_ros_driver2/msg/custom_msg.hpp>
+
+#include "livox_ode_multiray_shape.h"
 
 namespace gazebo
 {

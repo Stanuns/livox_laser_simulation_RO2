@@ -1,18 +1,21 @@
-#include <rclcpp/rclcpp.hpp>
-#include <gazebo_ros/node.hpp>
-#include <rclcpp/logging.hpp>
-
+#include <boost/chrono.hpp>
 #include <gazebo/physics/Model.hh>
-#include <gazebo/physics/MultiRayShape.hh>// Store the latest laser scans into laserMsg
+#include <gazebo/physics/MultiRayShape.hh>  // Store the latest laser scans into laserMsg
 #include <gazebo/physics/PhysicsEngine.hh>
 #include <gazebo/physics/World.hh>
 #include <gazebo/sensors/RaySensor.hh>
 #include <gazebo/transport/Node.hh>
-#include <chrono>
-#include "ros2_livox/livox_points_plugin.h"
-#include "ros2_livox/csv_reader.hpp"
-#include "ros2_livox/livox_ode_multiray_shape.h"
+#include <gazebo_ros/node.hpp>
 #include <livox_ros_driver2/msg/custom_msg.hpp>
+#include <livox_ros_driver2/msg/custom_point.hpp>
+#include <rclcpp/logging.hpp>
+#include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/point_cloud2.hpp>
+#include <sensor_msgs/point_cloud2_iterator.hpp>
+
+#include "ros2_livox/csv_reader.hpp"
+#include "ros2_livox/livox_points_plugin.h"
+#include "ros2_livox/livox_ode_multiray_shape.h"
 
 namespace gazebo
 {
@@ -72,7 +75,7 @@ namespace gazebo
         node = transport::NodePtr(new transport::Node());
         node->Init(raySensor->WorldName());
         // PointCloud2 publisher
-        cloud2_pub = node_->create_publisher<sensor_msgs::msg::PointCloud2>(curr_scan_topic + "_PointCloud2", 10);
+        cloud2_pub = node_->create_publisher<sensor_msgs::msg::PointCloud2>(curr_scan_topic + "/pointcloud", 10);
         // CustomMsg publisher
         custom_pub = node_->create_publisher<livox_ros_driver2::msg::CustomMsg>(curr_scan_topic, 10);
 
@@ -123,99 +126,96 @@ namespace gazebo
         }
     }
 
-    void LivoxPointsPlugin::OnNewLaserScans()
-{
-    // Check if rayShape has been initialized
-    if (rayShape)
-    {
+
+
+    void LivoxPointsPlugin::OnNewLaserScans() {
+        if (!rayShape) {
+            return; // 检查是否已经初始化了 rayShape
+        }
+
         std::vector<std::pair<int, AviaRotateInfo>> points_pair;
-        // Initialize ray scan point pairs
         InitializeRays(points_pair, rayShape);
         rayShape->Update();
 
-        // Create laser scan message and set the timestamp
         msgs::Set(laserMsg.mutable_time(), world->SimTime());
         msgs::LaserScan *scan = laserMsg.mutable_scan();
         InitializeScan(scan);
 
-        // Create a custom message pp_livox for publishing Livox CustomMsg type messages
+        // 创建自定义消息 pp_livox，用于发布 Livox CustomMsg 类型消息
         livox_ros_driver2::msg::CustomMsg pp_livox;
         pp_livox.header.stamp = node_->get_clock()->now();
         pp_livox.header.frame_id = raySensor->Name();
         int count = 0;
         boost::chrono::high_resolution_clock::time_point start_time = boost::chrono::high_resolution_clock::now();
 
-        // For publishing PointCloud2 type messages
-        sensor_msgs::msg::PointCloud cloud;
-        cloud.header.stamp = node_->get_clock()->now();
-        cloud.header.frame_id = raySensor->Name();
-        auto &clouds = cloud.points;
+        // 用于 PointCloud2 类型消息发布
+        sensor_msgs::msg::PointCloud2 cloud2;
+        cloud2.header.stamp = node_->get_clock()->now();
+        cloud2.header.frame_id = raySensor->Name();
 
-        // Iterate over ray scan point pairs
-        for (auto &pair : points_pair)
-        {
+        sensor_msgs::PointCloud2Modifier modifier(cloud2);
+        modifier.setPointCloud2FieldsByString(2, "xyz", "rgb");
+        modifier.resize(points_pair.size());
+
+        sensor_msgs::PointCloud2Iterator<float> out_x(cloud2, "x");
+        sensor_msgs::PointCloud2Iterator<float> out_y(cloud2, "y");
+        sensor_msgs::PointCloud2Iterator<float> out_z(cloud2, "z");
+
+        // 遍历射线扫描点对
+        for (const auto &pair : points_pair) {
             auto range = rayShape->GetRange(pair.first);
             auto intensity = rayShape->GetRetro(pair.first);
 
-            // Handle out-of-range data
-            if (range >= RangeMax())
-            {
-                range = 0;
-            }
-            else if (range <= RangeMin())
-            {
+            // 处理超出范围的数据
+            if (range <= RangeMin() || range >= RangeMax()) {
                 range = 0;
             }
 
-            // Calculate point cloud data
+            // 计算点云数据
             auto rotate_info = pair.second;
             ignition::math::Quaterniond ray;
             ray.Euler(ignition::math::Vector3d(0.0, rotate_info.zenith, rotate_info.azimuth));
             auto axis = ray * ignition::math::Vector3d(1.0, 0.0, 0.0);
             auto point = range * axis;
 
-            // Fill the CustomMsg point cloud message
+            // 填充 CustomMsg 点云消息
             livox_ros_driver2::msg::CustomPoint p;
             p.x = point.X();
             p.y = point.Y();
             p.z = point.Z();
             p.reflectivity = intensity;
 
-            // Fill the PointCloud point cloud message
-            clouds.emplace_back();
-            clouds.back().x = point.X();
-            clouds.back().y = point.Y();
-            clouds.back().z = point.Z();
+            // 填充 PointCloud2 点云消息
+            *out_x = point.X();
+            *out_y = point.Y();
+            *out_z = point.Z();
 
-            // Fill the PointCloud point cloud message
-            clouds.emplace_back();
-            clouds.back().x = point.X();
-            clouds.back().y = point.Y();
-            clouds.back().z = point.Z();
+            ++out_x;
+            ++out_y;
+            ++out_z;
 
-            // Calculate timestamp offset
+            // 计算时间戳偏移
             boost::chrono::high_resolution_clock::time_point end_time = boost::chrono::high_resolution_clock::now();
             boost::chrono::nanoseconds elapsed_time = boost::chrono::duration_cast<boost::chrono::nanoseconds>(end_time - start_time);
             p.offset_time = elapsed_time.count();
 
-            // Add point cloud data to the CustomMsg message
+            // 将点云数据添加到 CustomMsg 消息中
             pp_livox.points.push_back(p);
             count++;
         }
 
-        if (scanPub && scanPub->HasConnections()) scanPub->Publish(laserMsg);
+        if (scanPub && scanPub->HasConnections()) {
+            scanPub->Publish(laserMsg);
+        }
 
-        // Set the number of point cloud data and publish the CustomMsg message
+        // 发布 CustomMsg 消息
         pp_livox.point_num = count;
         custom_pub->publish(pp_livox);
 
-        // Publish PointCloud2 type message
-        sensor_msgs::msg::PointCloud2 cloud2;
-        sensor_msgs::convertPointCloudToPointCloud2(cloud, cloud2);
-        cloud2.header = cloud.header;
+        // 发布 PointCloud2 类型消息
         cloud2_pub->publish(cloud2);
     }
-}
+
 
     void LivoxPointsPlugin::InitializeRays(std::vector<std::pair<int, AviaRotateInfo>> &points_pair,
                                            boost::shared_ptr<physics::LivoxOdeMultiRayShape> &ray_shape)
