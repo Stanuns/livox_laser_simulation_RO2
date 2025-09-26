@@ -56,4 +56,5 @@ ament_auto_package(
   INSTALL_TO_SHARE
   scan_mode
   urdf
+  meshes
 )
